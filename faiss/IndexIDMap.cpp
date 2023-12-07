@@ -18,6 +18,7 @@
 #include <faiss/impl/FaissAssert.h>
 #include <faiss/utils/Heap.h>
 #include <faiss/utils/WorkerThread.h>
+#include <faiss/impl/ResultCollectorFactory.h>
 
 namespace faiss {
 
@@ -102,6 +103,24 @@ struct ScopedSelChange {
     }
 };
 
+// RAII object to reset the id_map parameter in ResultCollectorFactory object
+// This object make sure to reset the id_map parameter in ResultCollectorFactory
+// once the program exist current method scope.
+struct ScopedColChange {
+    ResultCollectorFactory* collector_factory = nullptr;
+    void set(
+            ResultCollectorFactory* collector_factory,
+            const std::vector<int64_t>* id_map) {
+        this->collector_factory = collector_factory;
+        collector_factory->id_map = id_map;
+    }
+    ~ScopedColChange() {
+        if (collector_factory) {
+            collector_factory->id_map = nullptr;
+        }
+    }
+};
+
 } // namespace
 
 template <typename IndexT>
@@ -114,6 +133,7 @@ void IndexIDMapTemplate<IndexT>::search(
         const SearchParameters* params) const {
     IDSelectorTranslated this_idtrans(this->id_map, nullptr);
     ScopedSelChange sel_change;
+    ScopedColChange col_change;
 
     if (params && params->sel) {
         auto idtrans = dynamic_cast<const IDSelectorTranslated*>(params->sel);
@@ -130,6 +150,10 @@ void IndexIDMapTemplate<IndexT>::search(
             this_idtrans.sel = params->sel;
             sel_change.set(params_non_const, &this_idtrans);
         }
+    }
+
+    if (params && params->col && !params->col->id_map) {
+        col_change.set(params->col, &this->id_map);
     }
     index->search(n, x, k, distances, labels, params);
     idx_t* li = labels;
